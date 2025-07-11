@@ -1,0 +1,9 @@
+[build]
+  command = "npm install"
+  functions = "functions"
+  publish = "."
+
+[[redirects]]
+  from = "/socket"
+  to = "/.netlify/functions/socket"
+  status = 200
