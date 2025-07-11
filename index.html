@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WildForge Nexus</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+  <script src="https://js.stripe.com/v3/"></script>
+</head>
+<body class="bg-gray-900 text-white">
+  <div class="flex flex-col items-center justify-center h-screen">
+    <h1 class="text-4xl font-bold text-cyan-400">WildForge Nexus</h1>
+    <canvas id="gameCanvas" width="800" height="600" class="border-2 border-purple-500"></canvas>
+    <div id="ui" class="mt-4">
+      <p id="gems">Gems: 0</p>
+      <p id="creatures">Creatures: 0</p>
+      <button id="tradeBtn" class="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700">Trade</button>
+      <button id="premiumBtn" class="bg-cyan-600 px-4 py-2 rounded hover:bg-cyan-700">Get Premium ($5)</button>
+    </div>
+    <div id="tradeUI" class="hidden mt-4 bg-gray-800 p-4 rounded">
+      <h2 class="text-2xl">Trade Market</h2>
+      <ul id="tradeList"></ul>
+      <button id="listCreature" class="bg-green-600 px-4 py-2 rounded hover:bg-green-700">List Creature</button>
+    </div>
+    <div id="leaderboard" class="mt-4">
+      <h2 class="text-2xl">Leaderboard</h2>
+      <ul id="leaderboardList"></ul>
+    </div>
+  </div>
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const socket = io('/.netlify/functions/socket');
+    const stripe = Stripe('pk_test_51YOURSTRIPEPUBLICKEY'); // Replace with your Stripe public key
+
+    let player = { id: Math.random().toString(36).slice(2), x: 400, y: 300, gems: 10, creatures: [] };
+    let players = {};
+    let creatures = [
+      { id: 1, type: 'Fire Drake', x: 100, y: 100, rarity: 'common' },
+      { id: 2, type: 'Ice Wyrm', x: 200, y: 200, rarity: 'rare' }
+    ];
+
+    // Player Movement
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'w') player.y -= 10;
+      if (e.key === 's') player.y += 10;
+      if (e.key === 'a') player.x -= 10;
+      if (e.key === 'd') player.x += 10;
+      if (e.key === 'e') captureCreature();
+      socket.emit('move', player);
+    });
+
+    // Capture Creature
+    function captureCreature() {
+      creatures.forEach((c, i) => {
+        if (Math.abs(player.x - c.x) < 20 && Math.abs(player.y - c.y) < 20) {
+          player.creatures.push(c);
+          creatures.splice(i, 1);
+          document.getElementById('creatures').textContent = `Creatures: ${player.creatures.length}`;
+          socket.emit('capture', c.id);
+        }
+      });
+    }
+
+    // Trading
+    document.getElementById('tradeBtn').addEventListener('click', () => {
+      document.getElementById('tradeUI').classList.toggle('hidden');
+      updateTradeList();
+    });
+
+    document.getElementById('listCreature').addEventListener('click', () => {
+      if (player.creatures.length > 0) {
+        const creature = player.creatures.shift();
+        socket.emit('listTrade', { ...creature, seller: player.id });
+        document.getElementById('creatures').textContent = `Creatures: ${player.creatures.length}`;
+      }
+    });
+
+    function updateTradeList() {
+      const tradeList = document.getElementById('tradeList');
+      tradeList.innerHTML = '';
+      socket.on('trades', (trades) => {
+        tradeList.innerHTML = '';
+        trades.forEach(t => {
+          const li = document.createElement('li');
+          li.textContent = `${t.type} - 10 Gems`;
+          li.className = 'text-cyan-400 cursor-pointer';
+          li.onclick = () => buyCreature(t);
+          tradeList.appendChild(li);
+        });
+      });
+    }
+
+    function buyCreature(creature) {
+      if (player.gems >= 10) {
+        player.gems -= 10;
+        player.creatures.push(creature);
+        document.getElementById('gems').textContent = `Gems: ${player.gems}`;
+        document.getElementById('creatures').textContent = `Creatures: ${player.creatures.length}`;
+        socket.emit('buy', { creatureId: creature.id, buyer: player.id });
+      }
+    }
+
+    // Leaderboard
+    function updateLeaderboard() {
+      const leaderboardList = document.getElementById('leaderboardList');
+      leaderboardList.innerHTML = '';
+      Object.values(players).sort((a, b) => b.creatures.length - a.creatures.length).slice(0, 5).forEach(p => {
+        const li = document.createElement('li');
+        li.textContent = `Player ${p.id.slice(0, 4)}: ${p.creatures.length} creatures`;
+        leaderboardList.appendChild(li);
+      });
+    }
+
+    // Stripe Payment
+    document.getElementById('premiumBtn').addEventListener('click', () => {
+      stripe.redirectToCheckout({
+        lineItems: [{ price: 'price_1YOURSTRIPEPRICEID', quantity: 1 }], // Replace with your Stripe price ID
+        mode: 'subscription',
+        successUrl: window.location.href,
+        cancelUrl: window.location.href
+      });
+    });
+
+    // Multiplayer
+    socket.on('connect', () => {
+      socket.emit('join', player);
+    });
+
+    socket.on('players', (serverPlayers) => {
+      players = serverPlayers;
+      updateLeaderboard();
+    });
+
+    socket.on('creatures', (serverCreatures) => {
+      creatures = serverCreatures;
+    });
+
+    socket.on('wildSurge', (newCreature) => {
+      creatures.push(newCreature);
+    });
+
+    // Game Loop
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'green';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'blue';
+      ctx.fillRect(player.x, player.y, 20, 20);
+      Object.values(players).forEach(p => {
+        if (p.id !== player.id) {
+          ctx.fillStyle = 'red';
+          ctx.fillRect(p.x, p.y, 20, 20);
+        }
+      });
+      creatures.forEach(c => {
+        ctx.fillStyle = c.rarity === 'rare' ? 'purple' : 'gray';
+        ctx.fillRect(c.x, c.y, 15, 15);
+      });
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>
